@@ -1,0 +1,12 @@
+[package]
+name = "tokio-key-value-store"
+version = "0.1.0"
+authors = ["Anders Bennehag <anders@bennehag.com>"]
+
+[dependencies]
+
+bytes = "0.4"
+futures = "0.1"
+tokio-io = "0.1"
+tokio-proto = "0.1"
+tokio-service = "0.1"
