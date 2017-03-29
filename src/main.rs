@@ -163,13 +163,12 @@ impl KVService {
     fn handle_req(&self, req: &Command) -> KVResponse {
         match req {
             &Command::Set(ref k, ref v) => {
-                // TODO: Wont let me mutably borrow to modify map...
-                // self.map.set(k.clone(), v.clone());
+                self.map.set(k.clone(), v.clone());
                 KVResponse::Ok
             }
             &Command::Get(ref k) => {
                 match self.map.get(&k) {
-                    Some(v) => KVResponse::SimpleStr(v.clone()),
+                    Some(v) => KVResponse::SimpleStr((*v).clone()),
                     None => KVResponse::Nil,
                 }
             }
