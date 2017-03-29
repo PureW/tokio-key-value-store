@@ -1,3 +1,6 @@
+/// Very simple key-value store implemented on top of Tokio.
+/// Implements a simple protocol similar to Redis' RESP.
+
 extern crate bytes;
 extern crate futures;
 extern crate tokio_io;
@@ -6,8 +9,8 @@ extern crate tokio_service;
 
 use std::io;
 use std::str;
-use std::fmt;
-use bytes::{BytesMut, BufMut};
+use std::error::Error;
+use bytes::BytesMut;
 use tokio_io::codec::{Encoder, Decoder};
 use tokio_proto::pipeline::ServerProto;
 use tokio_service::Service;
@@ -19,70 +22,67 @@ use tokio_proto::TcpServer;
 extern crate key_value_store;
 use key_value_store::keyvalue::keyvalue::KeyValueStore;
 
-pub enum InputEventType {
-    Set,
-    Get,
+/// The `Command` codifies a request
+#[derive(Debug)]
+pub enum Command {
+    Set(String, String),
+    Get(String),
     Unknown,
 }
 
-pub struct InputEvent {
-    event: InputEventType,
-    key: String,
-    value: Option<String>,
-}
+impl Command {
+    /// Build a `Command from a `String`
+    pub fn from_line(line: &str) -> Result<Command, io::Error> {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some(cmd) => {
+                let parts: Vec<_> = parts.map(|s| s.to_string()).collect();
 
-impl InputEvent {
-    pub fn new(evt: InputEventType,
-               key: &str,
-               value: Option<&str>)
-               -> Result<InputEvent, io::Error> {
-        // TODO: Use Into-trait to accept String as well as &str
-        let key = key.to_string();
-        let sval = value.map(|s| s.to_string());
-
-        Ok(InputEvent {
-            event: evt,
-            key: key,
-            value: sval,
-        })
-    }
-    pub fn new_from_str(evt: &str,
-                        key: &str,
-                        value: Option<&str>)
-                        -> Result<InputEvent, io::Error> {
-        let mut etype = match evt {
-            "set" => InputEventType::Set,
-            "get" => InputEventType::Get,
-            _     => InputEventType::Unknown,
-
-        };
-        InputEvent::new(etype, key, value)
-    }
-}
-
-pub struct LineCodec;
-
-impl LineCodec {
-    fn decode_line(&self, line: &str) -> Result<InputEvent, io::Error> {
-        let parts: Vec<&str> = line.split("\t").collect();
-        println!("Got {} parts", parts.len());
-        match parts.len() {
-            2 | 3 => {
-                let (etype, key, val) = (parts[0], parts[1], parts.get(2));
-                let val = val.map(|s| *s);
-                println!("{} {} {:?}", etype, key, val);
-                InputEvent::new_from_str(etype, key, val)
+                Command::new_from_str(cmd, parts)
             }
-            _ => Err(io::Error::new(io::ErrorKind::Other, "bad data")),
+            None => Err(io::Error::new(io::ErrorKind::Other, "no command")),
+        }
+    }
+
+    /// Helper-func to verify input and generate error-message for faulty input
+    fn verify_input_args(cmd: &str, num_args: usize, args: &Vec<String>) -> Result<(), io::Error> {
+        if args.len() != num_args {
+            Err(io::Error::new(io::ErrorKind::Other,
+                               format!("wrong number of arguments to '{:?}'-command", cmd)))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Logic for building a `Command`
+    fn new_from_str(evt: &str, mut parts: Vec<String>) -> Result<Command, io::Error> {
+        match evt {
+            "set" => {
+                try!(Command::verify_input_args(evt, 2, &parts));
+                let mut p = parts.drain(0..);
+                Ok(Command::Set(p.next().unwrap(), p.next().unwrap()))
+            }
+            "get" => {
+                try!(Command::verify_input_args(evt, 1, &parts));
+                let mut p = parts.drain(0..);
+                Ok(Command::Get(p.next().unwrap()))
+            }
+            _ => Err(io::Error::new(io::ErrorKind::Other, format!("unknown command"))),
         }
     }
 }
 
+/// `LineCodec` converts from bytes into higher-level primitives
+pub struct LineCodec;
+
 impl Decoder for LineCodec {
-    type Item = InputEvent;
+    type Item = String;
     type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<InputEvent>> {
+    /// `decode` produces a `String` from bytes on the wire.
+    ///
+    /// Protocol is string-based utf-8 encoded separated by newlines (\n)
+    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<String>> {
         if let Some(i) = buf.iter().position(|&b| b == b'\n') {
             // remove the serialized frame from the buffer.
             let line = buf.split_to(i);
@@ -90,15 +90,8 @@ impl Decoder for LineCodec {
             // Also remove the '\n'
             buf.split_to(1);
 
-            // Turn this data into a UTF string and return it in a Frame.
             match str::from_utf8(&line) {
-                Ok(s) => {
-                    println!("Decoding {}...", s);
-                    match self.decode_line(s) {
-                        Ok(evt) => Ok(Some(evt)),
-                        Err(err) => Err(err),
-                    }
-                }
+                Ok(s) => Ok(Some(s.to_string())),
                 Err(_) => Err(io::Error::new(io::ErrorKind::Other, "invalid UTF-8")),
             }
         } else {
@@ -107,6 +100,7 @@ impl Decoder for LineCodec {
     }
 }
 
+/// Codifies the response from daemon
 pub enum KVResponse {
     Ok,
     Nil,
@@ -119,6 +113,7 @@ impl Encoder for LineCodec {
     type Item = KVResponse;
     type Error = io::Error;
 
+    /// `encode` translates from a `KVResponse` into the corresponding byte-stream.
     fn encode(&mut self, resp: KVResponse, buf: &mut BytesMut) -> io::Result<()> {
         println!("Encoding response...");
         let s: String = match resp {
@@ -137,7 +132,7 @@ pub struct LineProto;
 
 impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for LineProto {
     /// For this protocol style, `Request` matches the codec `In` type
-    type Request = InputEvent;
+    type Request = String;
 
     /// For this protocol style, `Response` matches the coded `Out` type
     type Response = KVResponse;
@@ -150,6 +145,7 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for LineProto {
     }
 }
 
+/// Service exposing `KeyValueStore` to Tokio
 pub struct KVService {
     map: KeyValueStore,
 }
@@ -158,11 +154,34 @@ impl KVService {
     pub fn new() -> KVService {
         KVService { map: KeyValueStore::new() }
     }
+
+    /// Handle a request
+    ///
+    /// This takes place after Tokio translates from bytes to `Command`.
+    ///
+    /// Returns a `KVResponse` which Tokio translates to bytes.
+    fn handle_req(&self, req: &Command) -> KVResponse {
+        match req {
+            &Command::Set(ref k, ref v) => {
+                // TODO: Wont let me mutably borrow to modify map...
+                // self.map.set(k.clone(), v.clone());
+                KVResponse::Ok
+            }
+            &Command::Get(ref k) => {
+                match self.map.get(&k) {
+                    Some(v) => KVResponse::SimpleStr(v.clone()),
+                    None => KVResponse::Nil,
+                }
+            }
+            &Command::Unknown => KVResponse::Error("ERR".to_string(), format!("unknown command")),
+        }
+    }
 }
 
+/// Tokio details of gluing `KVService` into tokio-framework
 impl Service for KVService {
     // These types must match the corresponding protocol types:
-    type Request = InputEvent;
+    type Request = String;
     type Response = KVResponse;
 
     // For non-streaming protocols, service errors are always io::Error
@@ -172,27 +191,10 @@ impl Service for KVService {
     type Future = BoxFuture<Self::Response, Self::Error>;
 
     // Produce a future for computing a response from a request.
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let resp = match req.event {
-            InputEventType::Set => {
-                match req.value {
-                    Some(val) => {
-                        // TODO: Wont let me mutably borrow to modify map...
-                        //self.map.set(req.key, val.clone());
-                        KVResponse::Ok
-                    },
-                    None => KVResponse::Error("ERR".to_string(), "no value to set".to_string()),
-                }
-            }
-            InputEventType::Get => {
-                match self.map.get(&req.key) {
-                    Some(v) => KVResponse::SimpleStr(v.clone()),
-                    None => KVResponse::Nil,
-                }
-            },
-            InputEventType::Unknown => {
-                KVResponse::Error("ERR".to_string(), format!("unknown command"))
-            }
+    fn call(&self, line: Self::Request) -> Self::Future {
+        let resp = match Command::from_line(&line) {
+            Ok(req) => self.handle_req(&req),
+            Err(e) => KVResponse::Error("ERR".to_string(), e.description().to_string()),
         };
 
         future::ok(resp).boxed()
