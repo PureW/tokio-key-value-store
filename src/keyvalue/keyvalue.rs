@@ -1,23 +1,25 @@
-/// Simple key-value store
+/// Simple, concurrent key-value store
 ///
 ///
 
-use std::collections::HashMap;
+extern crate concurrent_kv;
 
+use std::sync::Arc;
 
+#[derive(Default)]
 pub struct KeyValueStore {
-    kvdata: HashMap<String, String>,
+    kvdata: concurrent_kv::Library<String, String>,
 }
 
 impl<'a> KeyValueStore {
     pub fn new() -> KeyValueStore {
-        KeyValueStore { kvdata: HashMap::new() }
+        Self::default()
     }
 
-    pub fn set(&mut self, key: String, val: String) {
+    pub fn set(&self, key: String, val: String) {
         self.kvdata.insert(key, val);
     }
-    pub fn get(&'a self, key: &String) -> Option<&'a String> {
+    pub fn get(&self, key: &String) -> Option<Arc<String>> {
         self.kvdata.get(key)
     }
 }
@@ -33,10 +35,10 @@ mod tests {
         let tests = [("foo".to_string(), "bar".to_string()),
                      ("cake".to_string(), "strawberry".to_string())];
 
-        let mut kv = KeyValueStore::new();
-        for &(ref key, ref value) in tests.iter() {
+        let kv = KeyValueStore::new();
+        for &(ref key, ref value) in tests.into_iter() {
             kv.set(key.clone(), value.clone());
-            assert_eq!(kv.get(&key).unwrap(), value);
+            assert_eq!((*kv.get(&key).unwrap()).clone(), value.to_string());
         }
     }
 }
