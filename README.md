@@ -2,6 +2,8 @@
 Distributed key-value store
 ============================
 
+[![Build Status](https://travis-ci.org/PureW/tokio-key-value-store.svg?branch=master)](https://travis-ci.org/PureW/tokio-key-value-store)
+
 Introduction
 ------------
 
