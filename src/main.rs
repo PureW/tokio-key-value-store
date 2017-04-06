@@ -10,6 +10,7 @@ extern crate tokio_service;
 use std::io;
 use std::str;
 use std::error::Error;
+use std::sync::Arc;
 use bytes::BytesMut;
 use tokio_io::codec::{Encoder, Decoder};
 use tokio_proto::pipeline::ServerProto;
@@ -147,12 +148,12 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for LineProto {
 
 /// Service exposing `KeyValueStore` to Tokio
 pub struct KVService {
-    map: KeyValueStore,
+    map: Arc<KeyValueStore>,
 }
 
 impl KVService {
-    pub fn new() -> KVService {
-        KVService { map: KeyValueStore::new() }
+    pub fn new(map: Arc<KeyValueStore>) -> KVService {
+        KVService { map: map }
     }
 
     /// Handle a request
@@ -207,7 +208,8 @@ fn main() {
     // The builder requires a protocol and an address
     let server = TcpServer::new(LineProto, addr);
 
+    let map = Arc::new(KeyValueStore::new());
     // We provide a way to *instantiate* the service for each new
     // connection; here, we just immediately return a new instance.
-    server.serve(|| Ok(KVService::new()));
+    server.serve(move || Ok(KVService { map: map.clone() }));
 }
