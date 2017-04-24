@@ -156,7 +156,7 @@ impl KVService {
         KVService { map: map }
     }
 
-    /// Handle a request
+    /// Process a `Command`.
     ///
     /// This takes place after Tokio translates from bytes to `Command`.
     ///
@@ -204,6 +204,8 @@ impl Service for KVService {
 fn main() {
     // Specify the localhost address
     let addr = "0.0.0.0:12345".parse().unwrap();
+
+    broken code
 
     // The builder requires a protocol and an address
     let server = TcpServer::new(LineProto, addr);
